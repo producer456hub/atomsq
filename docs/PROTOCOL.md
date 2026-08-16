@@ -69,8 +69,19 @@ F0 00 01 06 22 14 00/01 F7     nav-key capture: 01 = host owns them, 00 = they e
 ```
 
 The extension's author notes `13 01` "alone turns on the lights" and `14 01` "makes the Inst menu
-come back to life". These are the most interesting unknowns in the protocol — see
-`probe/modes.py`.
+come back to life".
+
+**[V]** All four messages were sent to the unit and it answered **nothing** to any of them, so
+they are write-only state flags — which is what a mode switch should look like. The device
+accepted them without complaint and continued to operate normally afterwards.
+
+Their *effect* is still **[?]**. The nav-key claim is objectively testable —
+`probe/modes.py navkeys` A/B-tests whether setting `0x14` stops the navigation keys emitting
+MIDI, by counting messages in each phase rather than relying on observation.
+
+**Not scanned:** the rest of the command-id space. This device exposes a USB DFU interface, so an
+unknown command id could plausibly detach it into the bootloader. Sweeping `0x00`–`0x7F` is a
+deliberate decision to be taken explicitly, not a thing to do casually.
 
 ---
 
