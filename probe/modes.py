@@ -65,10 +65,34 @@ def mode_replies(device):
           "what a mode switch should look like.")
 
 
-def count_nav(device, seconds: float, label: str):
+def wait_for_nav(device, timeout: float = 40.0):
+    """Block until a nav key is pressed, so the phase is self-paced.
+
+    Without this the timer starts the instant the script does, and whether the
+    test works depends on how fast someone can get to the device — which is a
+    property of the harness, not of the device.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for _delta, message in device.poll():
+            if len(message) >= 3 and (message[0] & 0xF0) == 0xB0 \
+                    and message[1] in NAV_KEYS:
+                return True
+        time.sleep(0.005)
+    return False
+
+
+def count_nav(device, seconds: float, label: str, wait: bool = True):
     print(f"\n{label}")
-    print(f"  press the nav keys (up/down/left/right and the wheel arrows) "
-          f"for {seconds:g}s...")
+    print("  press any nav key to start this phase "
+          "(up/down/left/right or the wheel arrows)...")
+    if wait:
+        if wait_for_nav(device):
+            print("  got one - keep pressing")
+        else:
+            print("  nothing seen in 40s")
+            return 0
+    print(f"  counting for {seconds:g}s...")
     messages = drain(device, seconds)
     nav_hits = 0
     other = 0
@@ -95,7 +119,12 @@ def mode_navkeys(device):
 
     device.send(command(0x14, 0x01))
     time.sleep(0.2)
-    without = count_nav(device, 12.0, "PHASE B — 0x14 = 01")
+    # Phase B must NOT wait for a press: if the flag works, no press will ever
+    # arrive and waiting would hang until the timeout, then report zero for the
+    # wrong reason. Just count for the same window.
+    print("\nPHASE B — 0x14 = 01")
+    print("  press the same keys the same number of times, now.")
+    without = count_nav(device, 12.0, "counting", wait=False)
 
     print("\n--- result ---")
     if with_midi and not without:

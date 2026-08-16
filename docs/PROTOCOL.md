@@ -86,7 +86,13 @@ surfaces verbatim (Windows renames the second one to `MIDIIN2/MIDIOUT2`):
 | ALSA | name | Windows | behaviour |
 |---|---|---|---|
 | `hw:1,0,0` | **ATM SQ** | `ATM SQ` | The control/native port. Answers the identity request, carries all panel traffic (knob CCs observed here), and is what PreSonus's `.device` file names as `detectorPortName`. |
-| `hw:1,0,1` | **ATM SQ Control** | `MIDIIN2 (ATM SQ)` | **Silent.** No unsolicited traffic, and it does not answer the universal identity request. |
+| `hw:1,0,1` | **ATM SQ Control** | `MIDIIN2 (ATM SQ)` | **Silent.** No unsolicited traffic, does not answer the universal identity request, and emits nothing while the panel is exercised — in any mode. |
+
+**[V]** Tested properly with `probe/ports.py`: both ports opened at once for two minutes while
+every control was exercised — pads, knobs, touch strip, buttons — and repeated after switching
+through Song, Inst, Editor and User. Result: **199 messages on port 1, zero on port 2.** It
+carries no panel data under any mode, so it is not a duplicate stream, a thru, or a
+mode-dependent split.
 
 The naming is counter-intuitive: the port *called* "Control" is the quiet one, while the plainly
 named port carries the control protocol. The likely explanation is that `hw:1,0,1` is the channel
@@ -127,9 +133,29 @@ come back to life".
 they are write-only state flags — which is what a mode switch should look like. The device
 accepted them without complaint and continued to operate normally afterwards.
 
-Their *effect* is still **[?]**. The nav-key claim is objectively testable —
-`probe/modes.py navkeys` A/B-tests whether setting `0x14` stops the navigation keys emitting
-MIDI, by counting messages in each phase rather than relying on observation.
+### `0x14` — nav-key capture — CONFIRMED
+
+**[V]** A/B-tested on hardware with `probe/modes.py navkeys`, counting messages per phase:
+
+| phase | flag | nav-key messages | other messages |
+|---|---|---|---|
+| A | `14 00` | **7** | 0 |
+| B | `14 01` | **0** | **19** |
+
+The 19 other messages in phase B are what make this conclusive: the device was still transmitting,
+so the nav keys went silent specifically rather than the device dropping off. A null result caused
+by a disconnect would have shown zero of everything.
+
+```
+F0 00 01 06 22 14 01 F7    host owns the nav keys — they stop emitting MIDI
+F0 00 01 06 22 14 00 F7    nav keys emit MIDI normally
+```
+
+This is how a host takes over the arrow cluster for its own navigation without those keys also
+firing MIDI at the DAW.
+
+`0x13` — the display / button-light ownership counterpart — remains **[?]**. It is harder to test
+objectively because judging it needs eyes on the panel.
 
 **Not scanned:** the rest of the command-id space. This device exposes a USB DFU interface, so an
 unknown command id could plausibly detach it into the bootloader. Sweeping `0x00`–`0x7F` is a
@@ -244,10 +270,38 @@ addresses, which is a hint the firmware shares a control table with other PreSon
 | `0x0E`–`0x15` | knobs 1–8 |
 | `0x1D` | big wheel |
 
-**[V]** All nine are declared `type="relative" options="signed plain"`. **[?]** In PreSonus's
-surface dialect "signed plain" means sign-magnitude around `0x40`: values `0x01`–`0x3F` are
-positive deltas, `0x41`–`0x7F` negative. Confirm empirically before trusting it — the alternative
-reading is two's complement, and the two disagree on direction.
+**[V]** All nine are declared `type="relative" options="signed plain"`.
+
+### The acceleration curve is real
+
+**[V]** Observed on hardware. The CC value is a **speed-weighted magnitude**, not a tick count —
+this is the "velocity multiplier" the manual mentions. One continuous turn of knob 4:
+
+```
++1 +2 +7 +12 +17 +22 +27 +32   then   +31 +26 +21 +16 +11 +10 +9 +8
+```
+
+It ramps in steps of roughly 5 and decays the same way. The largest magnitude seen so far is
+`0x23` (35), on knob 8. A host must treat these as weighted deltas — accumulating them as single
+ticks makes fast turns crawl, and scaling them linearly makes slow turns unusable.
+
+### Direction encoding — still unresolved
+
+**[?]** Every delta captured so far has been **positive**, because the test turns only went one
+way. Two readings of "signed plain" fit the positive data and disagree on reverse:
+
+| | forward | reverse |
+|---|---|---|
+| sign-magnitude around `0x40` | `0x01`–`0x3F` | `0x41`, `0x42`, `0x43` … |
+| two's complement | `0x01`–`0x3F` | `0x7F`, `0x7E`, `0x7D` … |
+
+A *slow* reverse turn gives small magnitudes, which cluster just above `0x40` under the first
+reading and just below `0x80` under the second — so the two are cleanly separable.
+`probe/encoders.py` waits for encoder traffic, captures both directions and prints the verdict.
+
+`decode_relative()` in `probe/atomsq.py` currently assumes **sign-magnitude**. If the answer comes
+back two's complement that function is wrong, and every reverse turn would produce a nonsense
+magnitude — a bug that presents as "the knob is jumpy" rather than as a decode error.
 
 ### Pads
 
