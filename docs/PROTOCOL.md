@@ -43,7 +43,59 @@ Two consequences:
 `Prot_01` specifically means *runtime* DFU: the device is advertising that it can be asked to
 detach into DFU mode. It is not currently in DFU mode.
 
+### DFU functional descriptor
+
+**[V]** Read on Linux (surfpad) with `lsusb -v -d 194f:020a` — no driver binding, no `dfu-util`:
+
+```
+Device Firmware Upgrade Interface Descriptor:
+  bmAttributes                       0x0B
+    Will Detach
+    Manifestation Intolerant
+    Upload Supported
+    Download Supported
+  wDetachTimeout                    255 milliseconds
+  wTransferSize                      64 bytes
+  bcdDFUVersion                   1.10
+```
+
+The headline is **Upload Supported** — the device will dump its own firmware to the host, so the
+image can be obtained from the unit itself rather than reverse-engineered out of a Universal
+Control installer. `Will Detach` means it detaches itself on `DFU_DETACH` without the host
+forcing a USB reset. `Manifestation Intolerant` means it expects a bus reset after a download
+completes.
+
+**Not yet attempted.** Reading this descriptor is passive; *detaching into DFU mode* is a real
+state change and is gated on an explicit decision.
+
+### Full device descriptor
+
+**[V]** `bcdUSB 2.00`, full speed (12 Mbps), bus powered, `MaxPower 500 mA`, `bcdDevice 1.17`,
+`iManufacturer` "PreSonus", `iProduct` "ATM SQ", `iSerial` "ATSC20100175". Three interfaces:
+0 = Audio Control, 1 = MIDI Streaming (two embedded in-jacks and two out-jacks, bulk endpoints
+`0x02` OUT / `0x81` IN, 64-byte packets), 2 = DFU.
+
 ---
+
+## 1a. The two MIDI ports
+
+**[V]** The MIDI Streaming interface exposes **two embedded jack pairs**, so the device presents
+two independent port pairs. Their real names come from the USB string descriptors, which Linux
+surfaces verbatim (Windows renames the second one to `MIDIIN2/MIDIOUT2`):
+
+| ALSA | name | Windows | behaviour |
+|---|---|---|---|
+| `hw:1,0,0` | **ATM SQ** | `ATM SQ` | The control/native port. Answers the identity request, carries all panel traffic (knob CCs observed here), and is what PreSonus's `.device` file names as `detectorPortName`. |
+| `hw:1,0,1` | **ATM SQ Control** | `MIDIIN2 (ATM SQ)` | **Silent.** No unsolicited traffic, and it does not answer the universal identity request. |
+
+The naming is counter-intuitive: the port *called* "Control" is the quiet one, while the plainly
+named port carries the control protocol. The likely explanation is that `hw:1,0,1` is the channel
+PreSonus's own Universal Control / Control Editor uses to read and write the device's stored
+configuration (the user-mode remapping), and that it only answers vendor-specific requests we
+have not yet found. **[?]**
+
+Note when testing this: `amidi -p PORT -S ... -d` races its own reply — the send completes before
+the dump starts listening, so the answer is lost. Start the listener first, then send.
 
 ## 2. Entering native mode
 
@@ -284,7 +336,7 @@ The `bcdDevice` of `0x0117` in the USB descriptor agrees with this reading.
 5. Which buttons actually have RGB LEDs versus plain on/off. **[?]**
 6. Real per-cell character capacity. `kMaxTextLength` is 50, but that is a protocol cap, not
    proof the panel can display 50 characters in a soft-button cell. **[?]**
-7. DFU: is *upload* (device → host firmware dump) permitted by `bmAttributes`? **[?]**
+7. What the second port (`ATM SQ Control`) actually carries, and what request wakes it. **[?]**
 
 `probe/screen.py len`, `probe/leds.py compose`, `probe/leds.py depth` and `probe/leds.py buttons`
 exist to close 3–6.
