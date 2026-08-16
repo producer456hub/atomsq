@@ -146,10 +146,53 @@ If that image turns out to be encrypted, dumping from the device becomes the onl
 readable firmware — and at that point the recovery-mode upload is worth the risk, because the
 encrypted vendor image still serves as the restore path.
 
+## The dump was attempted, and it did not work
+
+**[V]** Recovery mode entered as documented — Setup held while connecting USB. The device
+enumerated exactly as the INF predicted:
+
+```
+Found DFU: [194f:020b] ver=0015, devnum=3, cfg=1, intf=0, alt=0
+```
+
+Bootloader version **0.15**. In DFU mode it presents a single interface (protocol `02` = DFU
+mode, versus `01` runtime), only alt setting 0, and negotiates a **2048-byte** transfer size —
+32× the 64 bytes it advertises at runtime. It reported `dfuIDLE, status 0, no error condition`,
+so the `dfuERROR` seen at runtime is genuinely just the stub state.
+
+`dfu-util -d 194f:020b -a 0 -U` then ran cleanly and returned **3 bytes**:
+
+```
+00 21 41
+```
+
+Not a firmware image. The bootloader advertises `Upload Supported` in its descriptor and then
+returns a short block that terminates the transfer immediately — the "advertises upload but
+refuses it in practice" case. Vendors commonly stub `DFU_UPLOAD` precisely to stop firmware being
+read out.
+
+**No harm done.** `dfu-util -e` reported `can't detach`, but the device rebooted into application
+mode by itself: back as `194f:020a`, both MIDI ports up, identity replying
+`F0 7E 7F 06 02 00 01 06 22 00 00 00 00 01 17 00 F7` — still firmware 1.17. Entering and leaving
+recovery mode is clean and repeatable.
+
+### Where a firmware dump could still come from
+
+`XMOS_DFU_SELECTIMAGE` exists in `atomdevice.dll`, so the bootloader can be pointed at a specific
+image slot — plausibly what upload needs before it will yield anything.
+
+**Do not probe for it by trial.** The XMOS vendor request block is `0xF0`–`0xF6` and includes
+`XMOS_DFU_REVERTFACTORY` (`0xf1`), which overwrites the upgrade image. Guessing request numbers
+next to that is how a working unit gets rolled back or bricked. The correct approach is to
+disassemble `atomdevice.dll` around the `ClassOrVendorOutRequest(XMOS_DFU_SELECTIMAGE)` error
+string and read the actual constant and its arguments out of the code.
+
 ## Open
 
-1. Is the application region intact while in recovery mode? **[?]**
-2. Does the DFU interface leave `dfuERROR` once in recovery mode? **[?]**
-3. Is the Universal Control payload encrypted? **[?]**
+1. The real `XMOS_DFU_SELECTIMAGE` request number and arguments, to be *read from
+   `atomdevice.dll`*, never guessed. **[?]**
+2. Whether upload yields anything once an image slot is selected. **[?]**
+3. The runtime firmware-download URL Universal Control builds — it is not a static string in any
+   binary. Capturing it means running UC against the device and watching the HTTP traffic. **[?]**
 4. What the second MIDI port (`ATM SQ Control`) carries — a plausible candidate for the
    configuration and update channel Universal Control uses. **[?]**
