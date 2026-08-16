@@ -1,4 +1,17 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
-sim/overlay.json
-captures/*.bin
+
+# Proprietary material — deliberately NOT published.
+#
+# vendor/      PreSonus's own Studio One device scripts, the control-surface
+#              SDK extracted from musicdevices.dll, and the FaderPort family
+#              scripts. Regenerate with tools/extract_sdk.py on a machine with
+#              Studio One 7 installed.
+# sim/assets/  the panel render from the owner's manual PDF, used as the
+#              simulator's background. sim/layout.py records the geometry
+#              measured from it.
+# captures/    screenshots of the simulator (which embed that render) and raw
+#              probe logs.
+vendor/
+sim/assets/
+captures/

@@ -7,23 +7,44 @@ Unit under test: serial `ATSC20100175`, firmware **1.17**, `VID 0x194F` / `PID 0
 
 ## What's here
 
+**Parked 2026-08-16 — see [STATUS.md](STATUS.md) for where it got to and what to pick up first.**
+
 | path | what |
 |---|---|
+| `STATUS.md` | Where this stopped, what is settled, what is next. Start here. |
 | `docs/PROTOCOL.md` | The reference. Every fact tagged **[V]**erified / **[C]**ommunity / **[?]**inferred. |
+| `docs/FIRMWARE.md` | DFU, the XMOS/Thesycon stack, and why a firmware dump is closed to us. |
 | `docs/CONTROL_MAP.md` | All 296 control definitions, generated from PreSonus's own surface file. |
-| `vendor/presonus-js/` | PreSonus's shipped ATOM SQ implementation, copied out of Studio One 7. Primary source. |
 | `probe/` | Python harness that proves the protocol against real hardware. |
 | `sim/` | GUI simulator — develop with no hardware, and see exactly what our bytes do. |
+| `tools/` | udev rule, DFU dump script, and the extractors that rebuild `vendor/`. |
 | `core/` | Portable C++ library (not started). |
 
-## Why the vendor directory matters
+## How this was worked out, and what is missing from this repo
 
-Studio One ships its ATOM SQ control-surface implementation as **unobfuscated JavaScript**.
+Studio One ships its ATOM SQ control-surface implementation as **unobfuscated JavaScript**, and
+the SDK those scripts are written against is embedded as plain text inside `musicdevices.dll`.
 `ATOMSQProtocol.js`, `ATOMSQMidiDevice.js` and `ATOM SQ.surface.xml` are first-party sources for
-the screen protocol, the LED encoding and the complete control map. Almost everything in
-`docs/PROTOCOL.md` was read out of them rather than guessed at with a MIDI monitor.
+the screen protocol, the LED encoding and the complete control map. Most of `docs/PROTOCOL.md`
+was read out of them rather than guessed at with a MIDI monitor — and then confirmed against the
+hardware, which caught things the source alone did not (pads transmit on channel 10, not 1).
 
-They are vendored here as evidence so the docs can be re-derived and never drift.
+**That material is not in this repo.** It is PreSonus/Fender's copyrighted code and artwork, so
+publishing it is not ours to do. `vendor/`, `sim/assets/` and `captures/` are gitignored.
+Rebuild them locally on a machine with Studio One 7:
+
+```bash
+python tools/extract_sdk.py     # pulls the SDK out of musicdevices.dll
+# and copy the device scripts:
+#   "C:\Program Files\PreSonus\Studio One 7\devices\PreSonus\ATOM"  ->  vendor/presonus-js
+```
+
+The simulator's panel background is the top-down render from the owner's manual PDF; extract it
+into `sim/assets/atomsq_topdown.png` yourself. `sim/layout.py` documents the geometry measured
+from it, so the coordinates survive without the image.
+
+Without those, `probe/parse_surface.py` and the simulator's photo background will not run.
+Everything else does.
 
 ## Quick start
 
