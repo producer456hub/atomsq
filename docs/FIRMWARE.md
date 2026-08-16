@@ -80,6 +80,58 @@ and we do not have one.** So the safe order is:
 
 Doing it the other way round risks needing the thing we went in to get.
 
+## What Universal Control revealed
+
+**[V]** Fender Universal Control **v5.1.1 build 113315** (`Fender_Universal_Control_v5_1_1_113315.exe`,
+190 MB, NSIS self-extracting) unpacks with `7z x`. It ships **no firmware images at all** — they
+are fetched at update time, and no static firmware URL appears in any binary, so the endpoint is
+built at runtime. `https://api.presonus.com/v2` and `https://www.presonus.software` are the
+plausible hosts; neither exposes an obvious unauthenticated firmware path.
+
+What it does ship is far more useful:
+
+### Bootloader USB IDs — `Drivers/Atom/x64/PreSonusATOMDFU.inf`
+
+```
+"PreSonus ATOM DFU"               = USB\VID_194F&PID_0206&MI_02
+"PreSonus ATOM DFU Bootloader"    = USB\VID_194F&PID_0207
+"PreSonus ATOM SQ DFU"            = USB\VID_194F&PID_020A&MI_02
+"PreSonus ATOM SQ DFU Bootloader" = USB\VID_194F&PID_020B
+```
+
+**In recovery mode the ATOM SQ enumerates as `194f:020b`, not `194f:020a`.** Both bind to WinUSB
+under device interface GUID `{F253955F-DD15-45F6-89B1-89EE6604629B}`. Driver dated 2025-02-12,
+v1.12.0.17397.
+
+### The silicon — `hwaccess/atomdevice.dll`
+
+**[V]** Strings identify the whole stack:
+
+- `ClassOrVendorOutRequest(XMOS_DFU_SELECTIMAGE) failed` → the ATOM SQ is an **XMOS xCORE**
+  device. XMOS is the standard choice for class-compliant USB audio/MIDI, which also explains why
+  the MIDI side is so clean.
+- `thesycon::DfuApi`, `TLDFU_LoadFirmwareImageFromFile`, `TLDFU_RebootDevice`,
+  `TLDFU_StartUpgrade`, `TUSBAUDIO_GetFirmwareImage` → the host side is **Thesycon's** TLDFU /
+  TUSBAUDIO SDK, not a PreSonus implementation.
+- Image formats: `DfuImageRawBinary` and `DfuImageTlBinary` — raw binary, plus a Thesycon
+  container variant.
+- A note in the binary: *"The flag TLDFU_DEVICE_FLAG_USE_XMOS_DFU_EXTENSIONS is no longer
+  supported. See TLDFU_RebootDevice() and TLDFU_StartUpgrade()."*
+
+### Why this changes the risk assessment
+
+XMOS DFU is a **dual-image** design — that is precisely what `XMOS_DFU_SELECTIMAGE` selects
+between. Flash holds a **factory image** and an **upgrade image**; the factory image is not
+erased by an upgrade and is what the bootloader falls back to. That is the mechanism behind
+PreSonus's own documented recovery procedure.
+
+So the earlier worry — that entering recovery mode might leave us with no way back if the
+application region were pre-erased — is much weaker than assumed. The factory image is a
+manufacturer-provided fallback that a DFU *upload* cannot touch in any case.
+
+It also explains the `dfuERROR` on a bare `DFU_DETACH`: XMOS's DFU entry is a vendor request
+(`XMOS_DFU_RESETINTODFU`), not the standard detach, so the standard path was never going to work.
+
 ## Getting the official image
 
 **[V]** Universal Control is not anonymously downloadable — `pae-web.presonusmusic.com` returns
