@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
-"""ATOM SQ GUI simulator.
+"""ATOM SQ GUI simulator, drawn on a photo of the real unit.
 
-A software ATOM SQ that speaks the real protocol. Two jobs:
+The background is the official top-down render (extracted from the owner's
+manual), and every live element — 32 pads, 14 screen cells, 25 strip LEDs,
+every button — is drawn registered to it using `layout.py`. Using the photo as
+the substrate means layout compliance is checked by eye continuously: if a
+drawn control does not sit on its printed counterpart, the geometry is wrong.
 
-1. **Visualiser** - decode the exact bytes we send and show what the hardware
-   would do. Every LED and screen cell here is driven by the same message
-   parsing the device does, so if the sim looks wrong our bytes are wrong.
-2. **Stand-in** - develop and test with no hardware attached, and generate
-   input (clicks on pads/buttons/knobs) back to the driving script.
+Two jobs:
 
-Transport is a UDP socket carrying raw MIDI messages, one message per datagram.
-That keeps it dead simple and lets any language drive it.
+1. **Visualiser** — decode the exact bytes we send and show what the hardware
+   would do. Same parsing the device does, so if the sim looks wrong our bytes
+   are wrong. Anything it cannot explain bumps an "unexplained" counter.
+2. **Stand-in** — develop with no hardware attached; clicking pads and buttons
+   sends real input back to the driving script.
 
-    python sim/atomsq_sim.py                 # listen on 127.0.0.1:9001
-    python sim/atomsq_sim.py --port 9100
+Transport is UDP, one raw MIDI message per datagram, so any language can drive
+it.
 
-Then point a probe at it:
+    python sim/atomsq_sim.py [--port 9001] [--width 1500]
 
     python probe/screen.py map --target sim
+    python probe/leds.py sweep --both
 
-Tkinter only - no third-party GUI dependency.
+Keys:  c  calibration outlines      g  hide/show the photo
+       l  toggle control labels     q  quit
 """
 
 from __future__ import annotations
@@ -34,31 +39,46 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "probe"))
 
+import layout  # noqa: E402
 from atomsq import (  # noqa: E402
-    ALIGN_CENTER, ALIGN_LEFT, ALIGN_RIGHT, BUTTONS, CC, CELL_COUNT, CELLS,
+    ALIGN_LEFT, ALIGN_RIGHT, ATOMSQ_ID, BUTTONS, CC, CELL_COUNT,
     CMD_SCREEN_WRITE, ENCODERS, ICONS, NOTE_OFF, NOTE_ON, PAD_COUNT,
-    PAD_NOTE_START, PAD_LED_BLINK, PAD_LED_OFF, PAD_LED_ON, PAD_LED_PULSE,
-    PRESONUS_ID, ATOMSQ_ID, STRIP_LED_COUNT, STRIP_LED_START, SYSEX_START,
+    PAD_LED_BLINK, PAD_LED_OFF, PAD_LED_PULSE, PAD_NOTE_START, PRESONUS_ID,
+    STRIP_LED_COUNT, STRIP_LED_START, SYSEX_START,
 )
 
 DEFAULT_PORT = 9001
+ASSETS = Path(__file__).resolve().parent / "assets"
 
-# --- palette -------------------------------------------------------------
-
-BG = "#141416"
-PANEL = "#1e1e21"
-EDGE = "#2c2c31"
+BG = "#0e0e10"
 INK = "#d8d8dc"
 DIM = "#6a6a72"
-SCREEN_BG = "#04060a"
+UNLIT_PAD = "#17171b"
+SCREEN_BG = "#03060c"
 
-PAD_ROWS, PAD_COLS = 2, 16
-
-# Reverse lookups so decoded addresses can be named in the GUI.
 CC_TO_BUTTON = {cc: name for name, cc in BUTTONS.items()}
-CC_TO_ENCODER = {cc: name for name, cc in ENCODERS.items()}
-CELL_BY_ID = {cell: name for name, cell in CELLS.items()}
-ICON_CHARS = {code: name for name, code in ICONS.items()}
+
+# The device renders these control codes as private-font glyphs. Substitute a
+# single Unicode character each so a cell occupies the same width here as it
+# does on the panel — spelling the names out would misrepresent the layout.
+ICON_GLYPHS = {
+    ICONS["arrows_up_down"]: "↕",   # up-down arrow
+    ICONS["arrow_up"]: "▲",
+    ICONS["arrow_down"]: "▼",
+    ICONS["arrow_left"]: "◄",
+    ICONS["arrow_right"]: "►",
+    ICONS["arrow_double_left"]: "«",
+    ICONS["arrow_double_right"]: "»",
+    ICONS["circle"]: "○",
+    ICONS["degree"]: "°",
+    ICONS["folder"]: "▤",
+    ICONS["note"]: "♪",
+    ICONS["power"]: "◉",
+    ICONS["ok"]: "✓",
+    ICONS["close"]: "✕",
+    ICONS["dot_small"]: "·",
+    ICONS["dot_big"]: "●",
+}
 
 
 def to_hex_color(r: int, g: int, b: int) -> str:
@@ -72,7 +92,7 @@ class Cell:
     def __init__(self):
         self.text = ""
         self.color = (0x7F, 0x7F, 0x7F)
-        self.align = ALIGN_CENTER
+        self.align = 0
 
 
 class Pad:
@@ -94,7 +114,7 @@ class PanelState:
         self.button_colors = {}    # cc -> (r, g, b)
         self.strip = [0] * STRIP_LED_COUNT
         self.log = []
-        self.unknown = []          # messages the decoder could not explain
+        self.unknown = []
 
     def note(self, line: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')}  {line}")
@@ -114,17 +134,15 @@ class Decoder:
         if message[0] == SYSEX_START:
             self._sysex(message)
             return
-        status, rest = message[0], message[1:]
-        kind, channel = status & 0xF0, status & 0x0F
-        if len(rest) < 2:
+        if len(message) < 3:
             return
-        addr, value = rest[0], rest[1]
+        status, addr, value = message[0], message[1], message[2]
+        kind, channel = status & 0xF0, status & 0x0F
 
         # Native mode: Note Off on channel 16, note 0.
         if kind == NOTE_OFF and channel == 15 and addr == 0x00:
             self.state.native = value >= 0x40
-            self.state.note(
-                f"native mode {'ON' if self.state.native else 'OFF'}")
+            self.state.note(f"native mode {'ON' if self.state.native else 'OFF'}")
             return
 
         if kind == NOTE_ON:
@@ -139,12 +157,13 @@ class Decoder:
         index = note - PAD_NOTE_START
         if not 0 <= index < PAD_COUNT:
             self.state.note(f"note {note:02X} outside pad range")
+            self.state.unknown.append([NOTE_ON | channel, note, value])
             return
         pad = self.state.pads[index]
         if channel == 0:
             pad.state = value
         elif channel in (1, 2, 3):
-            # Status channel selects the colour component.
+            # The status channel selects which colour component this is.
             r, g, b = pad.color
             pad.color = {1: (value, g, b), 2: (r, value, b),
                          3: (r, g, value)}[channel]
@@ -171,26 +190,23 @@ class Decoder:
             self.state.note("sysex: not an ATOM SQ message")
             self.state.unknown.append(message)
             return
-        command = body[4]
-        args = body[5:]
-        if command == CMD_SCREEN_WRITE:
-            if len(args) < 5:
-                return
+        command, args = body[4], body[5:]
+        if command == CMD_SCREEN_WRITE and len(args) >= 5:
             cell_id, r, g, b, align = args[:5]
-            text = "".join(chr(c) for c in args[5:])
             if 0 <= cell_id < CELL_COUNT:
                 cell = self.state.cells[cell_id]
-                cell.text, cell.color, cell.align = text, (r, g, b), align
+                cell.text = "".join(chr(c) for c in args[5:])
+                cell.color = (r, g, b)
+                cell.align = align
         else:
-            # 0x13 / 0x14 land here - exactly what we want to see logged.
-            self.state.note(
-                f"sysex cmd 0x{command:02X} args="
-                + " ".join(f"{a:02X}" for a in args))
+            # 0x13 / 0x14 land here — exactly what we want surfaced.
+            self.state.note(f"sysex cmd 0x{command:02X} args="
+                            + " ".join(f"{a:02X}" for a in args))
             self.state.unknown.append(message)
 
 
 class Server(threading.Thread):
-    """UDP listener: inbound datagram = one raw MIDI message."""
+    """UDP listener: one inbound datagram = one raw MIDI message."""
 
     daemon = True
 
@@ -213,7 +229,6 @@ class Server(threading.Thread):
             self.decoder.feed(data)
 
     def send_input(self, message) -> None:
-        """Send a control event back to whoever is driving the sim."""
         if self.client:
             try:
                 self.sock.sendto(bytes(message), self.client)
@@ -221,156 +236,76 @@ class Server(threading.Thread):
                 pass
 
 
-class PhotoOverlay:
-    """A top-down photo of the real unit, blended over the vector panel.
-
-    This is the compliance check: line the photo up with the drawn panel and
-    any control that is the wrong size, in the wrong place, or missing shows up
-    immediately. Calibration (offset/scale/alpha) persists to overlay.json so
-    it survives a restart.
-    """
-
-    CONFIG = Path(__file__).resolve().parent / "overlay.json"
-
-    def __init__(self, path: str | None):
-        self.available = False
-        self.enabled = False
-        self.image = None
-        self.photo = None
-        self.alpha = 0.45
-        self.x = 0
-        self.y = 0
-        self.scale = 1.0
-        self._cache_key = None
-        if not path:
-            return
-        try:
-            from PIL import Image  # noqa: F401
-        except ImportError:
-            print("photo overlay needs Pillow: pip install pillow")
-            return
-        source = Path(path)
-        if not source.exists():
-            print(f"photo not found: {source}")
-            return
-        from PIL import Image
-        self.image = Image.open(source).convert("RGBA")
-        self.available = True
-        self.enabled = True
-        self.load()
-        print(f"overlay loaded: {source.name} {self.image.size}")
-
-    def load(self) -> None:
-        if not self.CONFIG.exists():
-            return
-        import json
-        try:
-            data = json.loads(self.CONFIG.read_text())
-        except (OSError, ValueError):
-            return
-        self.x = data.get("x", self.x)
-        self.y = data.get("y", self.y)
-        self.scale = data.get("scale", self.scale)
-        self.alpha = data.get("alpha", self.alpha)
-
-    def save(self) -> None:
-        import json
-        self.CONFIG.write_text(json.dumps(
-            {"x": self.x, "y": self.y, "scale": self.scale,
-             "alpha": self.alpha}, indent=2))
-
-    def rendered(self):
-        """Return a PhotoImage at the current scale and alpha, cached."""
-        if not self.available or not self.enabled:
-            return None
-        key = (round(self.scale, 3), round(self.alpha, 3))
-        if key != self._cache_key:
-            from PIL import Image, ImageTk
-            width = max(1, int(self.image.width * self.scale))
-            height = max(1, int(self.image.height * self.scale))
-            scaled = self.image.resize((width, height), Image.LANCZOS)
-            alpha_band = scaled.getchannel("A").point(
-                lambda a: int(a * self.alpha))
-            scaled.putalpha(alpha_band)
-            self.photo = ImageTk.PhotoImage(scaled)
-            self._cache_key = key
-        return self.photo
-
-    def status(self) -> str:
-        if not self.available:
-            return ""
-        onoff = "on" if self.enabled else "off"
-        return (f"overlay {onoff}  x={self.x} y={self.y} "
-                f"scale={self.scale:.2f} alpha={self.alpha:.2f}   "
-                "[o]toggle [arrows]move [+/-]scale [,/.]alpha [s]save")
-
-
 class SimulatorUI:
     def __init__(self, root: tk.Tk, state: PanelState, server: Server,
-                 overlay: "PhotoOverlay | None" = None):
+                 width: int):
         self.root = root
         self.state = state
         self.server = server
-        self.overlay = overlay or PhotoOverlay(None)
         self.blink_phase = 0.0
+        self.show_photo = True
+        self.show_calibration = False
+        self.show_labels = False
+
+        self.scale = width / layout.IMAGE_W
+        self.height = int(layout.IMAGE_H * self.scale)
+        self.photo = self._load_photo(width, self.height)
 
         root.title(f"ATOM SQ simulator — udp 127.0.0.1:{server.port}")
         root.configure(bg=BG)
 
-        self.canvas = tk.Canvas(root, width=1180, height=560, bg=BG,
+        self.canvas = tk.Canvas(root, width=width, height=self.height, bg=BG,
                                 highlightthickness=0)
-        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.canvas.pack(side=tk.TOP)
 
-        self.logbox = tk.Text(root, height=9, bg="#0c0c0e", fg=DIM,
-                              insertbackground=INK, font=("Consolas", 9),
-                              highlightthickness=0, borderwidth=0)
+        self.logbox = tk.Text(root, height=7, bg="#08080a", fg=DIM,
+                              font=("Consolas", 9), highlightthickness=0,
+                              borderwidth=0)
         self.logbox.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self.hit_targets = []  # (x0, y0, x1, y1, callback)
+        self.hit_targets = []
+        self._pressed = None
+        self._hover_encoder = None
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.canvas.bind("<MouseWheel>", self._on_wheel)
-        self._pressed = None
-        self._hover_encoder = None
         self.canvas.bind("<Motion>", self._on_motion)
-
         root.bind("<Key>", self._on_key)
+
         self.tick()
 
-    # -- overlay controls -------------------------------------------------
+    # -- assets -----------------------------------------------------------
 
-    def _on_key(self, event):
-        overlay = self.overlay
-        if not overlay.available:
-            return
-        step = 10 if (event.state & 0x0001) else 1  # shift = coarse
-        key = event.keysym.lower()
-        if key == "o":
-            overlay.enabled = not overlay.enabled
-        elif key == "left":
-            overlay.x -= step
-        elif key == "right":
-            overlay.x += step
-        elif key == "up":
-            overlay.y -= step
-        elif key == "down":
-            overlay.y += step
-        elif key in ("plus", "equal"):
-            overlay.scale = min(4.0, overlay.scale * 1.02)
-        elif key == "minus":
-            overlay.scale = max(0.05, overlay.scale / 1.02)
-        elif key == "comma":
-            overlay.alpha = max(0.0, overlay.alpha - 0.05)
-        elif key == "period":
-            overlay.alpha = min(1.0, overlay.alpha + 0.05)
-        elif key == "s":
-            overlay.save()
-            self.state.note(f"overlay calibration saved to {overlay.CONFIG.name}")
+    def _load_photo(self, width: int, height: int):
+        path = ASSETS / layout.IMAGE
+        if not path.exists():
+            print(f"panel photo missing: {path}")
+            return None
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            print("panel photo needs Pillow: pip install pillow")
+            return None
+        image = Image.open(path).convert("RGB")
+        return ImageTk.PhotoImage(image.resize((width, height), Image.LANCZOS))
 
-    # -- geometry ---------------------------------------------------------
+    # -- coordinate helpers ----------------------------------------------
+
+    def px(self, box):
+        """Scale a layout rect into canvas pixels."""
+        x0, y0, x1, y1 = box
+        s = self.scale
+        return x0 * s, y0 * s, x1 * s, y1 * s
+
+    def circle(self, spec):
+        cx, cy, r = spec
+        s = self.scale
+        return (cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s
 
     def _register(self, box, on_press=None, on_release=None, encoder=None):
         self.hit_targets.append((box, on_press, on_release, encoder))
+
+    # -- input ------------------------------------------------------------
 
     def _on_motion(self, event):
         self._hover_encoder = None
@@ -399,10 +334,21 @@ class SimulatorUI:
             return
         cc = ENCODERS[self._hover_encoder]
         # 'signed plain': 0x01..0x3F positive, 0x41..0x7F negative.
-        delta = 1 if event.delta > 0 else 0x41
-        self.server.send_input([CC, cc, delta])
-        self.state.note(f"-> {self._hover_encoder} delta "
-                        f"{'+1' if event.delta > 0 else '-1'} (CC {cc:02X}={delta:02X})")
+        raw = 1 if event.delta > 0 else 0x41
+        self.server.send_input([CC, cc, raw])
+        self.state.note(f"-> {self._hover_encoder} "
+                        f"{'+1' if event.delta > 0 else '-1'} (CC {cc:02X}={raw:02X})")
+
+    def _on_key(self, event):
+        key = event.keysym.lower()
+        if key == "c":
+            self.show_calibration = not self.show_calibration
+        elif key == "g":
+            self.show_photo = not self.show_photo
+        elif key == "l":
+            self.show_labels = not self.show_labels
+        elif key == "q":
+            self.root.destroy()
 
     # -- drawing ----------------------------------------------------------
 
@@ -410,209 +356,195 @@ class SimulatorUI:
         self.blink_phase = (self.blink_phase + 0.08) % 1.0
         self.canvas.delete("all")
         self.hit_targets.clear()
-        self.draw_screen(20, 16, 560, 210)
-        self.draw_knobs(600, 16)
-        self.draw_strip(600, 168)
-        self.draw_pads(20, 250)
-        self.draw_buttons(600, 250)
-        self.draw_status(20, 520)
-        self.draw_overlay()
+
+        if self.photo is not None and self.show_photo:
+            self.canvas.create_image(0, 0, image=self.photo, anchor="nw")
+
+        self.draw_pads()
+        self.draw_function_pads()
+        self.draw_screen()
+        self.draw_strip()
+        self.draw_buttons()
+        self.draw_knobs()
+        if self.show_calibration:
+            self.draw_calibration()
+        self.draw_status()
         self.sync_log()
         self.root.after(50, self.tick)
 
-    def draw_overlay(self):
-        """Drawn last so it sits on top of the vector panel for comparison."""
-        photo = self.overlay.rendered()
-        if photo is not None:
-            self.canvas.create_image(self.overlay.x, self.overlay.y,
-                                     image=photo, anchor="nw")
-        status = self.overlay.status()
-        if status:
-            self.canvas.create_text(20, 542, text=status, fill="#7a7a84",
-                                    anchor="w", font=("Consolas", 8))
+    def draw_pads(self):
+        for index in range(PAD_COUNT):
+            pad = self.state.pads[index]
+            note = PAD_NOTE_START + index
+            x0, y0, x1, y1 = self.px(layout.PADS[index])
+            fill = UNLIT_PAD
+            if pad.state != PAD_LED_OFF:
+                r, g, b = pad.color
+                visible = True
+                if pad.state == PAD_LED_BLINK:
+                    visible = self.blink_phase < 0.5
+                elif pad.state == PAD_LED_PULSE:
+                    dim = 0.35 + 0.65 * abs(0.5 - self.blink_phase) * 2
+                    r, g, b = int(r * dim), int(g * dim), int(b * dim)
+                fill = to_hex_color(r, g, b) if visible else UNLIT_PAD
+            self.canvas.create_rectangle(x0, y0, x1, y1, fill=fill,
+                                         outline="#000000", width=1)
+            if self.show_labels:
+                self.canvas.create_text((x0 + x1) / 2, y1 - 9,
+                                        text=f"{note:02X}", fill="#8a8a94",
+                                        font=("Consolas", 7))
+            self._register(
+                (x0, y0, x1, y1),
+                on_press=lambda n=note: self._send_note(n, 100),
+                on_release=lambda n=note: self._send_note(n, 0))
 
-    def draw_screen(self, x, y, w, h):
-        self.canvas.create_rectangle(x - 6, y - 6, x + w + 6, y + h + 6,
-                                     fill=PANEL, outline=EDGE)
-        self.canvas.create_rectangle(x, y, x + w, y + h, fill=SCREEN_BG,
+    def draw_function_pads(self):
+        for name, note in (("plus", 0x00), ("minus", 0x01)):
+            x0, y0, x1, y1 = self.px(layout.FUNCTION_PADS[name])
+            self._register(
+                (x0, y0, x1, y1),
+                on_press=lambda n=note: self._send_note(n, 100),
+                on_release=lambda n=note: self._send_note(n, 0))
+            if self.show_calibration:
+                self.canvas.create_rectangle(x0, y0, x1, y1, outline="#39d0ff")
+
+    def draw_screen(self):
+        x0, y0, x1, y1 = self.px(layout.SCREEN)
+        self.canvas.create_rectangle(x0, y0, x1, y1, fill=SCREEN_BG,
                                      outline="#0d1522")
+        width, height = x1 - x0, y1 - y0
+        col_w = width / 3
+        band = height / 3
 
-        col_w = w / 3
-        # Top band: soft buttons 1-3 (cells 0-2 line 1, 3-5 line 2).
-        # Middle band: the two wide main lines (cells 6, 7).
-        # Bottom band: soft buttons 4-6 (cells 8-10 line 1, 11-13 line 2).
-        top_ids = [(0, 3), (1, 4), (2, 5)]
-        bottom_ids = [(8, 11), (9, 12), (10, 13)]
-        band = h * 0.32
-        mid_y = y + band
-
-        for col, (l1, l2) in enumerate(top_ids):
-            cx = x + col * col_w
-            self._cell_text(l1, cx, y + 6, col_w, 20)
-            self._cell_text(l2, cx, y + 28, col_w, 20)
+        # Top band: soft buttons 1-3, line 1 then line 2.
+        # Middle band: the two wide main lines.
+        # Bottom band: soft buttons 4-6.
+        for col, (l1, l2) in enumerate([(0, 3), (1, 4), (2, 5)]):
+            cx = x0 + col * col_w
+            self._cell(l1, cx, y0 + 2, col_w, band / 2 - 2)
+            self._cell(l2, cx, y0 + band / 2, col_w, band / 2 - 2)
             if col:
-                self.canvas.create_line(cx, y, cx, mid_y, fill="#16233a")
+                self.canvas.create_line(cx, y0, cx, y0 + band, fill="#16233a")
 
-        self.canvas.create_rectangle(x, mid_y, x + w, mid_y + band,
-                                     fill="#070d18", outline="#16233a")
-        self._cell_text(6, x, mid_y + 8, w, 22, big=True)
-        self._cell_text(7, x, mid_y + 34, w, 22, big=True)
+        mid = y0 + band
+        self.canvas.create_rectangle(x0, mid, x1, mid + band, fill="#060b14",
+                                     outline="#16233a")
+        self._cell(6, x0, mid + 3, width, band / 2 - 3, big=True)
+        self._cell(7, x0, mid + band / 2, width, band / 2 - 3, big=True)
 
-        bottom_y = mid_y + band
-        for col, (l1, l2) in enumerate(bottom_ids):
-            cx = x + col * col_w
-            self._cell_text(l1, cx, bottom_y + 8, col_w, 20)
-            self._cell_text(l2, cx, bottom_y + 30, col_w, 20)
+        low = mid + band
+        for col, (l1, l2) in enumerate([(8, 11), (9, 12), (10, 13)]):
+            cx = x0 + col * col_w
+            self._cell(l1, cx, low + 2, col_w, band / 2 - 2)
+            self._cell(l2, cx, low + band / 2, col_w, band / 2 - 2)
             if col:
-                self.canvas.create_line(cx, bottom_y, cx, y + h, fill="#16233a")
+                self.canvas.create_line(cx, low, cx, y1, fill="#16233a")
 
-        # The six soft buttons flanking the screen, top row then bottom row.
-        for col in range(3):
-            for row, base in ((0, 0), (1, 3)):
-                name = f"lcd{col + base + 1}"
-                cc = BUTTONS[name]
-                bx = x + col * col_w + col_w / 2 - 26
-                by = y - 4 if row == 0 else y + h - 16
-                self._button(bx, by, 52, 14, name, cc, tiny=True)
-
-    def _cell_text(self, cell_id, x, y, w, h, big=False):
+    def _cell(self, cell_id, x, y, w, h, big=False):
         cell = self.state.cells[cell_id]
-        color = to_hex_color(*cell.color) if cell.text else "#243247"
-        display = cell.text or f"·{cell_id:X}"
-        # Render private-font control codes as a readable placeholder.
-        display = "".join(
-            f"<{ICON_CHARS[ord(ch)]}>" if ord(ch) in ICON_CHARS else ch
-            for ch in display)
+        color = to_hex_color(*cell.color) if cell.text else "#1e2c40"
+        text = cell.text or f"·{cell_id:X}"
+        text = "".join(ICON_GLYPHS.get(ord(ch), ch) for ch in text)
+
+        size = max(7, int(11 * self.scale * (1.25 if big else 1.0)))
+        # Consolas is monospaced at roughly 0.55 em; clip rather than let a
+        # long string bleed across neighbouring cells, which is what the
+        # hardware does with its own fixed cell widths.
+        budget = max(1, int((w - 8) / (size * 0.62)))
+        if len(text) > budget:
+            text = text[:budget]
+
         anchor, tx = "center", x + w / 2
         if cell.align == ALIGN_LEFT:
-            anchor, tx = "w", x + 6
+            anchor, tx = "w", x + 4
         elif cell.align == ALIGN_RIGHT:
-            anchor, tx = "e", x + w - 6
+            anchor, tx = "e", x + w - 4
+        self.canvas.create_text(tx, y + h / 2, text=text, fill=color,
+                                anchor=anchor, font=("Consolas", size))
+
+    def draw_strip(self):
+        for index, box in enumerate(layout.STRIP_LEDS):
+            x0, y0, x1, y1 = self.px(box)
+            lit = self.state.strip[index] >= 64
+            self.canvas.create_oval(x0, y0, x1, y1,
+                                    fill="#ff4a3a" if lit else "#2a1512",
+                                    outline="")
+
+    def draw_buttons(self):
+        for name, box in layout.BUTTONS.items():
+            cc = BUTTONS[name]
+            x0, y0, x1, y1 = self.px(box)
+            level = self.state.buttons.get(cc, 0)
+            rgb = self.state.button_colors.get(cc)
+            if rgb and any(rgb):
+                self.canvas.create_rectangle(x0, y0, x1, y1,
+                                             fill=to_hex_color(*rgb),
+                                             outline="#000000")
+            elif level >= 64:
+                self.canvas.create_rectangle(x0, y0, x1, y1, fill="#f0f0f4",
+                                             outline="#000000")
+            elif level > 0:
+                self.canvas.create_rectangle(x0, y0, x1, y1, fill="#5a5a64",
+                                             outline="#000000", stipple="gray50")
+            if self.show_labels:
+                self.canvas.create_text((x0 + x1) / 2, y0 - 6, text=name,
+                                        fill="#9a9aa4", font=("Consolas", 7))
+            self._register(
+                (x0, y0, x1, y1),
+                on_press=lambda c=cc, n=name: self._send_cc(c, 127, n),
+                on_release=lambda c=cc, n=name: self._send_cc(c, 0, n))
+
+    def draw_knobs(self):
+        for index, spec in enumerate(layout.KNOBS):
+            box = self.circle(spec)
+            self._register(box, encoder=f"knob{index + 1}")
+            if self.show_calibration:
+                self.canvas.create_oval(*box, outline="#39d0ff")
+        box = self.circle(layout.WHEEL)
+        self._register(box, encoder="wheel")
+        if self.show_calibration:
+            self.canvas.create_oval(*box, outline="#39d0ff")
+
+    def draw_calibration(self):
+        """Outline every hit region so misregistration is obvious."""
+        for box in layout.PADS:
+            self.canvas.create_rectangle(*self.px(box), outline="#39ff88")
+        for box in layout.BUTTONS.values():
+            self.canvas.create_rectangle(*self.px(box), outline="#ffbb33")
+        for box in layout.STRIP_LEDS:
+            self.canvas.create_rectangle(*self.px(box), outline="#ff5a3c")
+        self.canvas.create_rectangle(*self.px(layout.SCREEN), outline="#39d0ff")
+        self.canvas.create_rectangle(*self.px(layout.STRIP_BODY),
+                                     outline="#8866ff")
+
+    def draw_status(self):
+        native = "NATIVE MODE" if self.state.native else "standalone"
         self.canvas.create_text(
-            tx, y + h / 2, text=display, fill=color, anchor=anchor,
-            font=("Consolas", 13 if big else 10, "bold" if big else "normal"))
+            12, self.height - 14, text=native, anchor="w",
+            fill="#5ce07a" if self.state.native else DIM,
+            font=("Consolas", 10, "bold"))
+        self.canvas.create_text(
+            160, self.height - 14,
+            text=f"unexplained: {len(self.state.unknown)}", anchor="w",
+            fill="#e0a05c" if self.state.unknown else DIM,
+            font=("Consolas", 9))
+        self.canvas.create_text(
+            self.canvas.winfo_reqwidth() - 12, self.height - 14, anchor="e",
+            text="c calibration   g photo   l labels   q quit",
+            fill="#4a4a52", font=("Consolas", 8))
 
-    def draw_knobs(self, x, y):
-        for i in range(8):
-            col, row = i % 4, i // 4
-            cx = x + 60 + col * 82
-            cy = y + 40 + row * 76
-            name = f"knob{i + 1}"
-            self.canvas.create_oval(cx - 24, cy - 24, cx + 24, cy + 24,
-                                    fill="#26262b", outline="#3a3a42", width=2)
-            self.canvas.create_text(cx, cy, text=str(i + 1), fill=DIM,
-                                    font=("Consolas", 10))
-            self.canvas.create_text(cx, cy + 34, text=f"CC {ENCODERS[name]:02X}",
-                                    fill="#4a4a52", font=("Consolas", 7))
-            self._register((cx - 24, cy - 24, cx + 24, cy + 24), encoder=name)
-
-    def draw_strip(self, x, y):
-        self.canvas.create_text(x, y - 10, text="touch strip  CC 37-4F",
-                                fill="#4a4a52", anchor="w",
-                                font=("Consolas", 7))
-        led_w = 13
-        for i in range(STRIP_LED_COUNT):
-            lit = self.state.strip[i] >= 64
-            self.canvas.create_rectangle(
-                x + i * led_w, y, x + i * led_w + led_w - 2, y + 18,
-                fill="#3ad0ff" if lit else "#1d2126",
-                outline="#101216")
-
-    def draw_pads(self, x, y):
-        pad_w, pad_h, gap = 62, 62, 6
-        for row in range(PAD_ROWS):
-            for col in range(PAD_COLS):
-                # pad[0][*] is the lower bank (notes 0x24-0x33); draw it below.
-                index = row * PAD_COLS + col
-                pad = self.state.pads[index]
-                note = PAD_NOTE_START + index
-                px = x + col * (pad_w + gap)
-                # Staggered: the upper bank sits half a pad to the right.
-                py = y + (PAD_ROWS - 1 - row) * (pad_h + gap)
-                px += 0 if row == 0 else pad_w / 2
-                self._pad(px, py, pad_w, pad_h, pad, note, index)
-
-    def _pad(self, x, y, w, h, pad, note, index):
-        on = pad.state != PAD_LED_OFF
-        color = "#1b1b1f"
-        if on:
-            r, g, b = pad.color
-            if pad.state == PAD_LED_BLINK:
-                on = self.blink_phase < 0.5
-            elif pad.state == PAD_LED_PULSE:
-                scale = 0.35 + 0.65 * abs(0.5 - self.blink_phase) * 2
-                r, g, b = int(r * scale), int(g * scale), int(b * scale)
-            color = to_hex_color(r, g, b) if on else "#1b1b1f"
-        self.canvas.create_rectangle(x, y, x + w, y + h, fill=color,
-                                     outline="#34343c")
-        self.canvas.create_text(x + w / 2, y + h - 9, text=f"{note:02X}",
-                                fill="#5a5a62", font=("Consolas", 7))
-        self._register(
-            (x, y, x + w, y + h),
-            on_press=lambda n=note: self._send_note(n, 100),
-            on_release=lambda n=note: self._send_note(n, 0))
+    # -- outbound ---------------------------------------------------------
 
     def _send_note(self, note, velocity):
         self.server.send_input([NOTE_ON, note, velocity])
-        self.state.note(f"-> pad note {note:02X} vel {velocity}")
-
-    def draw_buttons(self, x, y):
-        groups = [
-            ("function", ["A", "B", "C", "D", "E", "F", "G", "H"]),
-            ("mode", ["song", "inst", "editor", "user", "shift"]),
-            ("nav", ["up", "down", "left", "right",
-                     "wheel_left", "wheel_right"]),
-            ("transport", ["stop", "play", "record", "metronome"]),
-        ]
-        cy = y
-        for title, names in groups:
-            self.canvas.create_text(x, cy, text=title, fill="#4a4a52",
-                                    anchor="w", font=("Consolas", 7))
-            cy += 12
-            for i, name in enumerate(names):
-                bx = x + (i % 6) * 88
-                by = cy + (i // 6) * 30
-                self._button(bx, by, 82, 24, name, BUTTONS[name])
-            cy += 30 * ((len(names) + 5) // 6) + 12
-
-    def _button(self, x, y, w, h, name, cc, tiny=False):
-        level = self.state.buttons.get(cc, 0)
-        rgb = self.state.button_colors.get(cc)
-        if rgb and any(rgb):
-            fill = to_hex_color(*rgb)
-        elif level >= 64:
-            fill = "#8a8a94"
-        elif level > 0:
-            fill = "#3c3c44"
-        else:
-            fill = "#202027"
-        self.canvas.create_rectangle(x, y, x + w, y + h, fill=fill,
-                                     outline="#3a3a42")
-        self.canvas.create_text(
-            x + w / 2, y + h / 2, text=name, font=("Consolas", 7),
-            fill=INK if level < 64 and not (rgb and any(rgb)) else "#101014")
-        self._register(
-            (x, y, x + w, y + h),
-            on_press=lambda c=cc, n=name: self._send_cc(c, 127, n),
-            on_release=lambda c=cc, n=name: self._send_cc(c, 0, n))
+        self.state.note(f"-> note {note:02X} vel {velocity}")
 
     def _send_cc(self, cc, value, name):
         self.server.send_input([CC, cc, value])
         self.state.note(f"-> {name} CC {cc:02X} = {value}")
 
-    def draw_status(self, x, y):
-        native = "NATIVE MODE" if self.state.native else "standalone"
-        color = "#5ce07a" if self.state.native else DIM
-        self.canvas.create_text(x, y, text=native, fill=color, anchor="w",
-                                font=("Consolas", 10, "bold"))
-        self.canvas.create_text(
-            x + 160, y,
-            text=f"unexplained messages: {len(self.state.unknown)}",
-            fill="#e0a05c" if self.state.unknown else DIM, anchor="w",
-            font=("Consolas", 9))
-
     def sync_log(self):
-        wanted = "\n".join(self.state.log[-9:])
+        wanted = "\n".join(self.state.log[-7:])
         if self.logbox.get("1.0", tk.END).strip() != wanted.strip():
             self.logbox.delete("1.0", tk.END)
             self.logbox.insert("1.0", wanted)
@@ -621,9 +553,10 @@ class SimulatorUI:
 def main():
     parser = argparse.ArgumentParser(description="ATOM SQ GUI simulator")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--photo", metavar="PATH",
-                        help="top-down photo of the real unit, blended over "
-                             "the panel to check layout compliance")
+    parser.add_argument("--width", type=int, default=1500,
+                        help="canvas width; panel geometry scales with it")
+    parser.add_argument("--calibrate", action="store_true",
+                        help="start with the alignment outlines visible")
     args = parser.parse_args()
 
     state = PanelState()
@@ -632,7 +565,8 @@ def main():
     state.note(f"listening on udp 127.0.0.1:{args.port}")
 
     root = tk.Tk()
-    SimulatorUI(root, state, server, PhotoOverlay(args.photo))
+    ui = SimulatorUI(root, state, server, args.width)
+    ui.show_calibration = args.calibrate
     root.mainloop()
 
 

@@ -50,20 +50,28 @@ running non-interactively).
 ## Simulator
 
 ```bash
-python sim/atomsq_sim.py
-python sim/atomsq_sim.py --photo captures/atomsq_topdown.jpg
+python sim/atomsq_sim.py                 # then drive it with --target sim
+python sim/atomsq_sim.py --calibrate     # alignment outlines on the artwork
 ```
 
-It decodes the same bytes the hardware does and renders the result: 14 screen cells, 32 pads with
-blink/pulse animation, the 25-LED touch strip, and every button. Clicking a pad or button sends
-real input back to the driving script, and the mouse wheel over a knob emits relative deltas.
+The panel is drawn **on the official top-down render**, extracted from the owner's manual PDF into
+`sim/assets/`. Every live element — 14 screen cells, 32 pads with blink/pulse, the 25-LED strip,
+every button — is registered to that photo, so layout compliance is checked continuously: if a
+drawn control does not sit on its printed counterpart, the geometry is wrong.
 
-Anything it cannot explain increments an **unexplained messages** counter — that counter is the
-point. If it moves, our understanding of the protocol has a hole in it.
+The geometry itself is **measured, not eyeballed**. `sim/measure.py` scans lines across the render
+and extracts the runs of saturated pixels, giving exact edges for every pad, button and LED; it
+prints numbers ready to paste into `sim/layout.py`.
 
-With `--photo`, a top-down shot of the real unit is blended over the drawn panel so layout
-compliance can be checked by eye: `o` toggles, arrows nudge, `+`/`-` scale, `,`/`.` set opacity,
-`s` saves the calibration.
+Clicking a pad or button sends real input back to the driving script, and the mouse wheel over a
+knob emits relative deltas. Keys: `c` calibration outlines, `g` hide the photo, `l` labels,
+`q` quit.
+
+Anything the simulator cannot explain increments an **unexplained** counter on the status line —
+that counter is the point. If it moves, our understanding of the protocol has a hole in it.
+
+`sim/shot.ps1` captures the window to a PNG, so alignment can be checked without a human at the
+screen.
 
 ## Safety
 

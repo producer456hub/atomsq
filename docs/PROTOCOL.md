@@ -92,8 +92,12 @@ F0 00 01 06 22 12 <cell> <r> <g> <b> <align> <ascii…> F7
 
 ### Cell layout
 
+**[V]** Confirmed on hardware — writing each cell's own id into it and reading the panel matched
+this table exactly. Studio One's device-panel artwork agrees structurally too: three soft-button
+columns above, two wide lines through the middle, three columns below.
+
 The screen has six soft buttons, each with two lines, plus two full-width main lines —
-6 × 2 + 2 = **14**, which is exactly `kCellCount`. **[C]** the ids are:
+6 × 2 + 2 = **14**, which is exactly `kCellCount`:
 
 | | line 1 | line 2 |
 |---|---|---|
@@ -264,10 +268,15 @@ The `bcdDevice` of `0x0117` in the USB descriptor agrees with this reading.
 
 1. `0x13` / `0x14` semantics, and whether other command ids exist in `0x10`–`0x1F`. **[C]**
 2. Encoder delta encoding — sign-magnitude vs two's complement. **[?]**
-3. Cell-id → physical screen region, confirmed visually. **[C]**
-4. Whether blink/pulse compose with an assigned colour or override it. **[?]**
-5. Real colour bit depth — 7 bits are sent, but the panel may quantise far below that. **[?]**
-6. DFU: is *upload* (device → host firmware dump) permitted by `bmAttributes`? **[?]**
+3. Whether blink/pulse compose with an assigned colour or override it. **[?]**
+4. Real colour bit depth — 7 bits are sent, but the panel may quantise far below that. **[?]**
+5. Which buttons actually have RGB LEDs versus plain on/off. **[?]**
+6. Real per-cell character capacity. `kMaxTextLength` is 50, but that is a protocol cap, not
+   proof the panel can display 50 characters in a soft-button cell. **[?]**
+7. DFU: is *upload* (device → host firmware dump) permitted by `bmAttributes`? **[?]**
+
+`probe/screen.py len`, `probe/leds.py compose`, `probe/leds.py depth` and `probe/leds.py buttons`
+exist to close 3–6.
 
 ---
 
