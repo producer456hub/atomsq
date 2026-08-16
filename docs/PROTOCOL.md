@@ -259,6 +259,16 @@ reading is two's complement, and the two disagree on direction.
 | Per-pad pressure | poly aftertouch |
 | Global pressure | CC `0x16` |
 
+**[V] Pads transmit on MIDI channel 10, not channel 1.** Captured from the device in its default
+standalone mode: `99 30 10` / `89 30 00` — Note On/Off on **channel 10** (the GM drum channel),
+note `0x30`, i.e. `pad[0][12]`.
+
+This is an asymmetry worth being careful about: pad **LED output** is channel 1 (`0x90`, with
+`0x91`/`0x92`/`0x93` carrying colour), but pad **note input** arrives on channel 10.
+`surface.xml` hides this by declaring pads with the symbolic status `NoteTrigger` rather than a
+literal byte, leaving the channel for Studio One to resolve. Whether native mode changes the
+input channel is still **[?]** — worth confirming with `probe/listen.py --native`.
+
 ### ± function pads
 
 **[V]** Notes `0x00` (plus) and `0x01` (minus) for the trigger, and they report continuous

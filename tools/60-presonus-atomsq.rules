@@ -1,0 +1,17 @@
+# PreSonus ATOM SQ — let the desktop user talk to it without root.
+#
+# Needed because dfu-util must claim the USB interface directly, which is
+# normally root-only. Matching on the vendor rather than a single product id is
+# deliberate: in DFU mode the bootloader may enumerate under a different
+# product id, and a rule that only covered 020a would stop applying at exactly
+# the moment it is needed.
+#
+# TAG+="uaccess" hands the device to whoever holds the active local session via
+# a file ACL, which also covers that same user over SSH. The plugdev group is
+# the fallback for setups without logind seats.
+#
+# Install:
+#   sudo install -m644 60-presonus-atomsq.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+
+SUBSYSTEM=="usb", ATTR{idVendor}=="194f", MODE="0660", GROUP="plugdev", TAG+="uaccess"
