@@ -103,6 +103,15 @@ have not yet found. **[?]**
 Note when testing this: `amidi -p PORT -S ... -d` races its own reply — the send completes before
 the dump starts listening, so the answer is lost. Start the listener first, then send.
 
+**[V] macOS names the ports exactly as Linux does** — `ATM SQ` and `ATM SQ Control`, confirmed
+with `probe/identity.py` on macOS 26 (Apple silicon). Windows' `MIDIIN2 (ATM SQ)` renaming is a
+Windows behaviour, not the device's, so `port.startswith("ATM SQ")` works unchanged on macOS.
+The whole Python probe rig runs there too, with `python-rtmidi` in a venv — previously this had
+only ever run on Windows and Linux.
+
+⚠️ **iOS/iPadOS remains unrecorded, and must not be inferred from macOS.** On iPad a Novation
+Launchkey has been seen enumerating as "DAW Out/In" with no vendor name at all.
+
 ## 2. Entering native mode
 
 **[V]** `vendor/presonus-js/Shared/ATOMCommonMidiDevice.js`
@@ -285,6 +294,34 @@ colour or alignment actually changed. Worth copying — see `core/`.
 
 The arrow and transport addresses are deliberately non-contiguous — they sit on Mackie-ish
 addresses, which is a hint the firmware shares a control table with other PreSonus surfaces.
+
+### Buttons send a press AND a release
+
+**[V] Confirmed on hardware** — `probe/hold.py`, macOS, native mode. Every button tested sent
+`127` on press and `0` on release:
+
+| button | CC | observed |
+|---|---|---|
+| shift | `0x1F` | `127, 0` |
+| A | `0x00` | `127, 0` |
+| lcd1 (soft key 1) | `0x24` | `127, 0` |
+| song | `0x20` | `127, 0` |
+| play | `0x6D` | `127, 0` |
+| up (arrow) | `0x57` | `127, 0` |
+
+One from each family — modifier, function row, soft key, mode column, transport, navigation —
+because the transport and arrow addresses are Mackie-ish and could plausibly have been wired
+differently.
+
+This matters more than it looks. `surface.xml` declares these as transmitting CC and says
+nothing whatever about what a release looks like, so a host wanting **"hold X, press Y"**
+combinations had no documented basis for the release edge. It has one now: the modifier is
+**held, not toggled**.
+
+Not tested individually: `B`–`H`, `lcd2`–`lcd6`, `inst`, `editor`, `user`, `wheel_left`,
+`wheel_right`, `sustain_touch`, `down`, `left`, `right`, `metronome`, `record`, `stop`. Six of
+six across every family is strong evidence the panel is uniform, but it is evidence, not a
+sweep — `probe/hold.py --all` walks the lot.
 
 ### Encoders — relative, CC on channel 1
 
