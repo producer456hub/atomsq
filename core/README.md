@@ -79,12 +79,16 @@ being dropped.
 
 ## Status
 
-- `atomsq_core` and the test suite: **built and passing** (g++, `-Wall -Wextra
-  -Wpedantic`, no warnings).
-- `RtMidiTransport` and `examples/demo.cpp`: **written but not yet
-  compile-verified** — the build box has no `librtmidi-dev`, so CMake skipped
-  them. Install it and they build too:
+All four targets build clean on g++ (aarch64, `-Wall -Wextra -Wpedantic`, **no warnings**) with
+RtMidi 6.0.0:
 
-  ```bash
-  sudo apt-get install -y librtmidi-dev
-  ```
+```
+libatomsq_core.a     the dependency-free core
+libatomsq_rtmidi.a   the optional RtMidi adapter
+atomsq_tests         43 checks, 0 failures
+atomsq_demo          reference integration
+```
+
+The demo has not yet been run against the hardware — it needs the unit plugged into the same
+machine as the build. Its no-device path is exercised and behaves correctly: it reports which
+port prefix it looked for and lists what it did find, rather than failing silently.

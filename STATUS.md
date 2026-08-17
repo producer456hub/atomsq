@@ -47,19 +47,22 @@ Everything below is verified on the actual unit, not inferred:
 
 ## Pick up here
 
-### 1. Verify the RtMidi adapter — one command
+### 1. Run the C++ demo against the hardware
 
-`atomsq_core` and its 43-check test suite build clean and pass. The optional
-`RtMidiTransport` and `examples/demo.cpp` are written but were skipped by CMake
-because the build box has no RtMidi headers:
+Everything builds: core, RtMidi adapter, tests (43 checks, 0 failures) and demo, all warning-free
+with RtMidi 6.0.0. The one thing never done is running the demo with the device attached — it
+needs the ATOM SQ plugged into the same machine as the build.
 
 ```bash
-sudo apt-get install -y librtmidi-dev
-cd ~/atomsq/core && cmake -S . -B build && cmake --build build && ./build/atomsq_demo
+ssh -t david@100.100.203.108 "cd ~/atomsq/core && ./build/atomsq_demo"
 ```
 
-That is the end-to-end check: the C++ demo should paint the panel exactly like
-`probe/demo.py` does.
+With the unit on surfpad that should paint the panel exactly like `probe/demo.py` does, and print
+every pad, button, encoder and strip event. That is the end-to-end proof that the C++ path and the
+Python path agree.
+
+If the unit is on MAINTOP instead, the demo reports the port it looked for and lists what it
+found — which is how it behaved when tested.
 
 ### 2. Remaining protocol curiosities — all optional
 
