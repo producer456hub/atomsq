@@ -15,3 +15,5 @@ __pycache__/
 vendor/
 sim/assets/
 captures/
+build/
+core/build/

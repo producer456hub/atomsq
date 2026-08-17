@@ -16,8 +16,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> syncing $HERE -> $HOST:$REMOTE"
 if command -v rsync >/dev/null 2>&1; then
+    # build/ is excluded from the delete sweep: it only exists on the remote,
+    # and wiping it forces a full recompile on every sync.
     rsync -az --delete \
         --exclude '__pycache__' --exclude '*.pyc' --exclude 'captures/*.png' \
+        --exclude 'build' --exclude '.git' \
         "$HERE/" "$HOST:$REMOTE/"
 else
     # Windows OpenSSH ships scp but not rsync.

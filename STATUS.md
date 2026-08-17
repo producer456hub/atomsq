@@ -1,10 +1,11 @@
-# Status — parked 2026-08-16
+# Status — updated 2026-08-16
 
-Where this got to, and what to pick up first. The protocol work is essentially done and verified
-on hardware; what remains is a short list of cheap experiments and then writing the C++ core.
+The protocol work is done and verified on hardware, and the C++ core is written, built and
+passing. What remains is one optional build check and a few curiosities that block nothing.
 
-Hardware under test: PreSonus ATOM SQ, serial `ATSC20100175`, firmware **1.17**, currently
-attached to **surfpad** (`david@100.100.203.108`, workspace `~/atomsq`).
+Hardware under test: PreSonus ATOM SQ, serial `ATSC20100175`, firmware **1.17**. Workspace is
+mirrored to surfpad (`david@100.100.203.108:~/atomsq`) by `deploy-surfpad.sh`; the unit itself
+moves between MAINTOP and surfpad, so check `lsusb`/MIDI ports before assuming where it is.
 
 ---
 
@@ -28,6 +29,16 @@ Everything below is verified on the actual unit, not inferred:
   +27 +32`, decaying symmetrically), not a tick count.
 - **Second MIDI port** (`ATM SQ Control`) — silent. Two minutes, every control, all four modes:
   199 messages on port 1, zero on port 2.
+- **Buttons are not uniform.** Only nine of 30 take colour: A–H and Play are full RGB, Record is
+  red-only, Metronome blue-only, and the whole right-hand cluster is firmware-owned amber that no
+  host command reaches. `0x13` does not hand it over.
+- **Screen capacity** — 25 characters on a main line, 7 in a soft cell, each plus a single ellipsis
+  glyph the device appends itself. `kMaxTextLength = 50` is a message cap, not a display width.
+- **Encoder direction** — sign-magnitude around `0x40`: `0x01` is +1, `0x41` is −1. The knobs are
+  detentless, so the value can only ever be speed-weighted.
+- **Animation composes with colour** — blink and pulse keep the pad's own hue.
+- **The C++ core exists** — `core/`, C++17, no dependencies, 43 byte-level tests passing against
+  `docs/PROTOCOL.md` with no hardware required.
 - **Firmware is closed to us.** The chip is XMOS xCORE with a Thesycon DFU stack; the bootloader
   is `194f:020b` v0.15 and advertises `Upload Supported` but returns a 3-byte stub. Universal
   Control ships no images — it downloads them at runtime. Full account in `docs/FIRMWARE.md`.
@@ -36,43 +47,30 @@ Everything below is verified on the actual unit, not inferred:
 
 ## Pick up here
 
-### 1. Encoder direction — 2 minutes, and it matters
+### 1. Verify the RtMidi adapter — one command
 
-The only unresolved thing that would produce a *wrong* library. Every delta captured so far was
-positive because the test turns only went one way.
-
-```bash
-ssh david@100.100.203.108
-cd atomsq/probe && python3 encoders.py
-# turn knob 1 slowly clockwise ~8 clicks, then slowly counter-clockwise ~8 clicks
-```
-
-It waits for knob traffic (no timer to race) and prints the verdict. `decode_relative()` in
-`probe/atomsq.py` assumes **sign-magnitude around 0x40**; if the answer is two's complement that
-function is wrong and every reverse turn yields a nonsense magnitude — a bug that presents as
-"the knob feels jumpy", not as a decode error.
-
-### 2. The four visual questions — 75 seconds of watching
+`atomsq_core` and its 43-check test suite build clean and pass. The optional
+`RtMidiTransport` and `examples/demo.cpp` are written but were skipped by CMake
+because the build box has no RtMidi headers:
 
 ```bash
-cd atomsq/probe && python3 answers.py
+sudo apt-get install -y librtmidi-dev
+cd ~/atomsq/core && cmake -S . -B build && cmake --build build && ./build/atomsq_demo
 ```
 
-Each phase narrates itself on the device's own screen. Questions: does blink/pulse keep the pad's
-colour, how many brightness steps does the panel actually resolve, which buttons have real RGB,
-and how many characters a cell really shows (`kMaxTextLength` is 50, but that is a protocol cap).
+That is the end-to-end check: the C++ demo should paint the panel exactly like
+`probe/demo.py` does.
 
-### 3. `0x13`
+### 2. Remaining protocol curiosities — all optional
 
-The display / button-light ownership counterpart to `0x14`. Untested because judging it needs
-eyes on the panel rather than a message count.
+None of these block anything:
 
-### 4. Then: the C++ core
-
-The point of all this. `core/` is empty. Port the verified map into a portable library — RtMidi
-transport, no JUCE dependency in the core so JUCE, Rust (via C ABI) and CLI tools can all consume
-it. Mirror PreSonus's own dirty-tracking `ScreenBuffer`, which only emits SysEx for cells that
-actually changed. `probe/demo.py` is the reference integration to reproduce.
+- Exact LED bit depth. The ramp is smooth with no visible banding, so the full
+  range is usable; the true step count was never counted.
+- What the second MIDI port (`ATM SQ Control`) carries. Silent under every
+  condition tried.
+- Whether `0x13` hands over the amber cluster under some *other* ordering —
+  colour writes before the flag, or with `0x14` also set. As tested, it does not.
 
 ### Optional, deliberate, not casual
 
