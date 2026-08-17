@@ -285,23 +285,35 @@ It ramps in steps of roughly 5 and decays the same way. The largest magnitude se
 `0x23` (35), on knob 8. A host must treat these as weighted deltas — accumulating them as single
 ticks makes fast turns crawl, and scaling them linearly makes slow turns unusable.
 
-### Direction encoding — still unresolved
+### Direction encoding — SIGN-MAGNITUDE around `0x40`
 
-**[?]** Every delta captured so far has been **positive**, because the test turns only went one
-way. Two readings of "signed plain" fit the positive data and disagree on reverse:
+**[V]** Settled on hardware with `probe/encoders.py`, one direction per phase. A slow, steady
+turn of knob 1 gave a single value throughout each phase:
 
-| | forward | reverse |
-|---|---|---|
-| sign-magnitude around `0x40` | `0x01`–`0x3F` | `0x41`, `0x42`, `0x43` … |
-| two's complement | `0x01`–`0x3F` | `0x7F`, `0x7E`, `0x7D` … |
+| direction | every message |
+|---|---|
+| clockwise | `0x01` |
+| counter-clockwise | `0x41` |
 
-A *slow* reverse turn gives small magnitudes, which cluster just above `0x40` under the first
-reading and just below `0x80` under the second — so the two are cleanly separable.
-`probe/encoders.py` waits for encoder traffic, captures both directions and prints the verdict.
+```
+v < 0x40   ->  delta = +v
+v > 0x40   ->  delta = -(v - 0x40)
+```
 
-`decode_relative()` in `probe/atomsq.py` currently assumes **sign-magnitude**. If the answer comes
-back two's complement that function is wrong, and every reverse turn would produce a nonsense
-magnitude — a bug that presents as "the knob is jumpy" rather than as a decode error.
+So `0x01` is +1 and `0x41` is −1; magnitude is the low 6 bits and bit 6 is the sign. This is what
+`decode_relative()` in `probe/atomsq.py` already implemented — now verified rather than assumed.
+
+Note the constant value across a whole phase: at a slow, even rotation speed the magnitude stays
+at 1 and never accelerates, which is consistent with the speed-weighted curve above. Captured in
+native mode; the standalone-mode capture (`08`–`14` under acceleration) agrees in kind, so the
+encoding does not change between modes.
+
+### The encoders have no detents
+
+**[V]** Physically confirmed: the eight knobs and the wheel turn smoothly with no click stops, so
+there is no such thing as a "tick" to count. That is not a detail — it means the CC value can
+*only* be a speed-weighted magnitude, and any host treating these as step counts will feel wrong
+no matter how it scales them.
 
 ### Pads
 
