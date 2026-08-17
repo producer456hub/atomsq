@@ -112,6 +112,42 @@ only ever run on Windows and Linux.
 ⚠️ **iOS/iPadOS remains unrecorded, and must not be inferred from macOS.** On iPad a Novation
 Launchkey has been seen enumerating as "DAW Out/In" with no vendor name at all.
 
+### iPadOS names the ports DIFFERENTLY — the desktop matcher finds nothing
+
+**[V] Confirmed on an iPad Pro (M5), iPadOS 26**, ATOM SQ attached by USB-C, enumerated with
+CoreMIDI. This is the one place the naming genuinely diverges, and it breaks
+`port.startswith("ATM SQ")` completely:
+
+| property | macOS / Linux | **iPadOS** |
+|---|---|---|
+| `kMIDIPropertyName`, port 1 | `ATM SQ` | **`""` — empty** |
+| `kMIDIPropertyName`, port 2 | `ATM SQ Control` | **`Control`** |
+| `kMIDIPropertyDisplayName` | — | `ATM SQ` / `ATM SQ Control` |
+| `kMIDIPropertyModel` | — | `ATM SQ` |
+| `kMIDIPropertyManufacturer` | — | `PreSonus` |
+| `kMIDIPropertyDriverOwner` | — | `com.apple.AppleMIDIUSBDriver` |
+
+iPadOS puts the **endpoint** name in `kMIDIPropertyName` and the composed *device + endpoint*
+name in `kMIDIPropertyDisplayName`. The main port therefore has **no name at all** to match on.
+
+**Match on `model` or `manufacturer`, never on `name`.** A matcher that checks
+`name + displayName + model + manufacturer` together works on every platform tried:
+
+```
+model        == "ATM SQ"      ← reliable everywhere
+manufacturer == "PreSonus"    ← reliable everywhere
+name.hasPrefix("ATM SQ")      ← macOS/Linux only; finds NOTHING on iPadOS
+```
+
+⚠️ **And do not fall back to "the first destination".** An iPad enumerates a
+`Network Session 1` endpoint at index 0 by default, so a failed match plus a first-destination
+fallback sends native-mode SysEx to a network session — the same class of mistake that once had
+a 250 ms LED refresh playing notes on an unrelated synth.
+
+**Everything else works on iPadOS.** Native-mode claim, screen SysEx, the status-channel colour
+trick and 500 mA of bus power were all confirmed in one pass: text appeared on the panel and
+eight pads lit in distinct hues, driven from the iPad alone.
+
 ## 2. Entering native mode
 
 **[V]** `vendor/presonus-js/Shared/ATOMCommonMidiDevice.js`
