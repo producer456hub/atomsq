@@ -392,8 +392,17 @@ note `0x30`, i.e. `pad[0][12]`.
 This is an asymmetry worth being careful about: pad **LED output** is channel 1 (`0x90`, with
 `0x91`/`0x92`/`0x93` carrying colour), but pad **note input** arrives on channel 10.
 `surface.xml` hides this by declaring pads with the symbolic status `NoteTrigger` rather than a
-literal byte, leaving the channel for Studio One to resolve. Whether native mode changes the
-input channel is still **[?]** — worth confirming with `probe/listen.py --native`.
+literal byte, leaving the channel for Studio One to resolve.
+
+**[V] NATIVE MODE DOES NOT CHANGE THE INPUT CHANNEL.** Previously open, because the channel-10
+capture was taken in the device's standalone personality and the native case was never checked.
+Settled on an iPad Pro (M5) with the unit claimed by `8F 00 7F`: **32 pad hits across both rows,
+zero unhandled messages**, decoded by `core`'s channel-10 parser throughout. Velocity came
+through 5–98 with 25 distinct values across 32 hits, so the pads are genuinely velocity-sensitive
+as well.
+
+The asymmetry is therefore permanent and unconditional: **input on channel 10, LED output
+addressed on channel 1, in both personalities.**
 
 ### ± function pads
 
