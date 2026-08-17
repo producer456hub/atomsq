@@ -225,6 +225,11 @@ class AtomSQ:
             self._in_index = self._find_port(self.midi_in, port_name)
             self._out_index = self._find_port(self.midi_out, port_name)
 
+    # ⚠️ Name matching is PLATFORM-SPECIFIC. rtmidi reports the CoreMIDI *display* name on
+    # macOS, where "ATM SQ" works — but on iPadOS `kMIDIPropertyName` is "" for the main port
+    # and "Control" for the second, so a host written against the name alone finds nothing.
+    # Anything ported off this file must match on model/manufacturer instead. See
+    # docs/PROTOCOL.md §1a.
     @staticmethod
     def _find_port(midi, name: str) -> int:
         ports = midi.get_ports()
