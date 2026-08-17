@@ -218,6 +218,29 @@ PreSonus draws arrows and status marks without a bitmap path:
 | `0x07` | double arrow right | `0x1E` | dot small |
 | `0x08` | circle | `0x1F` | dot big |
 
+### Real text capacity, and automatic ellipsis
+
+**[V]** `kMaxTextLength = 50` is what the *message* accepts, not what the panel *shows*. Measured
+by writing a 49-glyph ruler (`A`–`Z` then `a`–`w`, so the last readable letter gives an exact
+count) into a wide line and a soft cell:
+
+| cell | characters shown | overflow |
+|---|---|---|
+| **main line** (full width) | last readable letter `Y` = **25**, plus the ellipsis → **26 cells** | device appends `…` |
+| **soft-button cell** (one of three columns) | last readable letter `G` = **7**, plus the ellipsis → **8 cells** | device appends `…` |
+
+Two things worth knowing:
+
+- **The device truncates for you, and marks it.** Overflow is not silently clipped — it renders a
+  single ellipsis **glyph occupying one character cell** (not three dots). So overflow is always
+  visible to the user rather than invisibly lost.
+- The geometry is self-consistent: three soft columns at 8 cells each is 24, against 26 on the
+  full-width line.
+
+For `core/`: truncate at **25** (main) and **7** (soft) when you want to control what gets
+dropped — abbreviate meaningfully rather than letting the tail disappear. Send longer text only
+when an ellipsis is an acceptable outcome.
+
 ### No bitmap path
 
 **[?]** The PreSonus SDK exposes only text cells — there is no graphics primitive anywhere in
@@ -364,6 +387,22 @@ State — **Note On, channel 1** (`0x90`), address = the pad's note:
 | `0x01` | blink |
 | `0x02` | pulse |
 
+**[V] Animation composes with colour.** Confirmed on hardware: with all 32 pads set to different
+hues and half blinking, half pulsing, every pad animated **in its own colour** — the rainbow
+survived and the two animations were clearly distinguishable. Colour and animation are
+independent, so blink and pulse are usable for colour-coded state rather than being mutually
+exclusive with it.
+
+That test also **verified the physical row mapping**, until then only inferred from the XML:
+blink went to pad indices 0–15 and pulse to 16–31, and the lower row flashed while the upper row
+pulsed. So `pad[0][*]` (notes `0x24`–`0x33`) is the **lower** row, `pad[1][*]` (`0x34`–`0x43`) the
+upper.
+
+**[V] Brightness is monotonic and smooth.** A red ramp of 0, 4, 8 … 124 across the pads in note
+order read as a continuous left-to-right gradient with the upper row brightest, no obvious
+banding. The exact step count was not measured, but there is no coarse quantisation — the full
+`0x00`–`0x7F` range is usable and fades should look clean.
+
 Colour — the **status channel selects the colour component**, same note address:
 
 | status | component |
@@ -375,10 +414,42 @@ Colour — the **status channel selects the colour component**, same note addres
 Each component is 7-bit. Studio One white-balances before sending — it scales green by `0.8` and
 blue by `0.7` — which implies the physical LEDs are green/blue biased.
 
-### Buttons
+### Buttons — only a minority actually take colour
 
-**[V]** Identical trick on CC status: `0xB1` / `0xB2` / `0xB3` = R / G / B, address = the
-button's CC number from §4. Monochrome on/off is plain `0xB0` at the same address.
+**[V]** The addressing is the same trick on CC status: `0xB1` / `0xB2` / `0xB3` = R / G / B,
+address = the button's CC number from §4, with plain `0xB0` as brightness. But **most of the
+panel does not honour it.** Established by driving all 30 addressable buttons to pure green, then
+blue, then red, then all three channels at once, and reading the panel each time:
+
+| buttons | LED | behaviour |
+|---|---|---|
+| **A–H** (CC `0x00`–`0x07`) | **full RGB** | took green, blue and red |
+| **Play** (CC `0x6D`) | **full RGB** | took green, blue and red |
+| **Record** (CC `0x6B`) | **red only** | ignored green and blue |
+| **Metronome** (CC `0x69`) | **blue only** | ignored green and red |
+| soft buttons `lcd1`–`lcd6`, nav arrows, wheel L/R, Shift, mode column (Song/Inst/Editor/User) | **not ours** | permanently lit **amber**, unaffected by any colour write |
+
+So **nine buttons take colour** (eight of them fully), two are fixed single-colour, and the entire
+right-hand cluster is driven by the device's own firmware for its menu UI and never responds to
+the host at all.
+
+A library that models all 30 as RGB would be lying about two thirds of them — `core/` must expose
+these as distinct kinds.
+
+**Testing note:** asking "which buttons are green" and then repeating for blue and red cannot
+detect a fixed-red button — it is lit during every pass and the question never asks about the one
+colour it shows. Driving R, G and B together lights everything that can light, in its own colour,
+and gives the whole map in one look.
+
+### `0x13` does not hand over the amber cluster
+
+**[V]** Tested: `F0 00 01 06 22 13 01 F7` followed by colour writes to the whole right-hand
+cluster left them unchanged — still amber. So the community reading of `0x13` as a
+panel-ownership switch does not extend to those LEDs, and there is a **hard ceiling on host
+control of this surface** that applies to any software, ours or anyone's.
+
+Caveat on scope: only this ordering was tried (`0x13` first, then colour). It remains possible
+that the writes must precede the flag, or that `0x14` must also be set. **[?]**
 
 ### Touch strip
 
@@ -405,19 +476,15 @@ The `bcdDevice` of `0x0117` in the USB descriptor agrees with this reading.
 
 ## 7. Open questions
 
-1. `0x13` / `0x14` semantics, and whether other command ids exist in `0x10`–`0x1F`. **[C]**
-2. Encoder delta encoding — sign-magnitude vs two's complement. **[?]**
-3. Whether blink/pulse compose with an assigned colour or override it. **[?]**
-4. Real colour bit depth — 7 bits are sent, but the panel may quantise far below that. **[?]**
-5. Which buttons actually have RGB LEDs versus plain on/off. **[?]**
-6. Real per-cell character capacity. `kMaxTextLength` is 50, but that is a protocol cap, not
-   proof the panel can display 50 characters in a soft-button cell. **[?]**
-7. What the second port (`ATM SQ Control`) actually carries, and what request wakes it. **[?]**
+Almost everything is settled. What remains:
 
-`probe/screen.py len`, `probe/leds.py compose`, `probe/leds.py depth` and `probe/leds.py buttons`
-exist to close 3–6.
-
----
+1. Whether `0x13` can be made to hand over the amber right-hand cluster under some *other*
+   ordering — colour writes before the flag, or `0x14` set as well. As tested, it cannot. **[?]**
+2. Exact LED bit depth. The ramp is smooth with no visible banding, so the full range is usable,
+   but the true number of steps was not counted. **[?]**
+3. What the second MIDI port (`ATM SQ Control`) carries. Silent under every condition tried;
+   plausibly the channel Universal Control uses for configuration. **[?]**
+4. Firmware. Closed without a disassembly pass — see `FIRMWARE.md`. **[?]**
 
 ## Sources
 

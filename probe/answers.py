@@ -76,6 +76,36 @@ def phase_buttons(device):
         time.sleep(PHASE_SECONDS / 3)
 
 
+def _hold_buttons(device, label, rgb):
+    """Drive every button to one colour and leave it there.
+
+    Separate from phase_buttons because asking 'which buttons are green' about
+    a static panel is answerable, while asking someone to track which of ~30
+    buttons changed across a three-colour cycle is not.
+    """
+    narrate(device, "TEST 3 of 4  button LEDs", f"all buttons {label}")
+    for cc in BUTTONS.values():
+        device.button_color(cc, rgb)
+        device.button_led(cc, 127)
+    print(f"phase 3 ({label.lower()}): every button driven to {label} {rgb}")
+    print("  buttons addressed: " + ", ".join(sorted(BUTTONS)))
+
+
+def phase_buttons_green(device):
+    # Green is the most diagnostic single colour: the panel's own idle states
+    # are amber, white and red, so anything showing green is definitely
+    # honouring our RGB write rather than sitting at a default.
+    _hold_buttons(device, "GREEN", (0x00, 0x7F, 0x00))
+
+
+def phase_buttons_blue(device):
+    _hold_buttons(device, "BLUE", (0x00, 0x00, 0x7F))
+
+
+def phase_buttons_red(device):
+    _hold_buttons(device, "RED", (0x7F, 0x00, 0x00))
+
+
 def phase_length(device):
     """A ruler in a wide cell and in a soft-button cell."""
     device.screen(CELLS["main1"], RULER, WHITE, ALIGN_LEFT)
@@ -88,10 +118,53 @@ def phase_length(device):
     print("  A=1 B=2 ... Z=26, a=27 b=28 ... w=49")
 
 
+def phase_buttons_white(device):
+    """Drive every channel at once so each LED shows its own native colour.
+
+    Asking "which are green" three times cannot see a fixed-red button, because
+    it is lit during every pass and the question never asks about it. Driving
+    R, G and B together lights everything that can light, in whatever colour it
+    physically is, so one look gives the complete map.
+    """
+    _hold_buttons(device, "WHITE (all channels)", (0x7F, 0x7F, 0x7F))
+
+
+# The right-hand cluster (soft buttons, nav, wheel arrows, shift, mode column)
+# sits amber and ignores every colour we send - the device's own firmware is
+# driving them for its menu UI. 0x13 is the community-reported "display /
+# button-light ownership" flag, so if it hands the panel over, these should
+# become ours.
+RIGHT_CLUSTER = ["lcd1", "lcd2", "lcd3", "lcd4", "lcd5", "lcd6",
+                 "up", "down", "left", "right",
+                 "wheel_left", "wheel_right", "shift",
+                 "song", "inst", "editor", "user"]
+
+
+def phase_ownership(device):
+    """Claim the panel with 0x13 = 01, then try to colour the amber cluster."""
+    from modes import command
+
+    print("phase (ownership): sending 0x13 = 01, then driving the right "
+          "cluster GREEN")
+    device.send(command(0x13, 0x01))
+    time.sleep(0.3)
+    narrate(device, "OWNERSHIP TEST 0x13=01", "right cluster -> GREEN")
+    for name in RIGHT_CLUSTER:
+        device.button_color(BUTTONS[name], (0x00, 0x7F, 0x00))
+        device.button_led(BUTTONS[name], 127)
+    print("  driven: " + ", ".join(RIGHT_CLUSTER))
+    print("  if these turn green, 0x13 is the panel-ownership switch")
+
+
 PHASES = {
     "compose": phase_compose,
     "depth": phase_depth,
     "buttons": phase_buttons,
+    "green": phase_buttons_green,
+    "blue": phase_buttons_blue,
+    "red": phase_buttons_red,
+    "white": phase_buttons_white,
+    "own": phase_ownership,
     "length": phase_length,
 }
 
