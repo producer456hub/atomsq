@@ -52,6 +52,7 @@ Needs `python-rtmidi`; the simulator's photo overlay additionally needs `pillow`
 
 ```bash
 python probe/identity.py               # firmware version, port inventory
+python probe/hold.py                   # do buttons send a release? (they do)
 python probe/listen.py --map           # press everything, diff against the docs
 python probe/screen.py map             # write each cell's id to the screen
 python probe/leds.py sweep             # rainbow across the 32 pads
