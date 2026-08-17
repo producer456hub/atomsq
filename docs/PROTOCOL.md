@@ -186,6 +186,12 @@ F0 00 01 06 22 12 <cell> <r> <g> <b> <align> <ascii…> F7
 - Manufacturer ID `00 01 06` is PreSonus's; `0x22` selects the ATOM SQ; `0x12` is *write text cell*.
 - **14 cells** (`ScreenConfig.kCellCount`), **50 characters max** (`kMaxTextLength`).
 - Colour is **per cell**, 7-bit per channel (`0x00`–`0x7F`).
+- **[V] The colour is the TEXT, not the cell background.** Observed on the unit by driving the
+  same values into a host-side mirror and comparing: the glyphs matched, the field behind them
+  did not. **The background is firmware-owned and there is no way to address it** — the write
+  carries one RGB per cell and it goes to the ink. A host designing a screen layout therefore
+  controls the type and nothing else, which rules out coloured panels, highlighted rows and
+  inverted selections. Mark state with the icon font (`0x1F` ●, `0x1E` ·) or with ink colour.
 - Alignment: `0` = center, `1` = left, `2` = right.
 
 ### Cell layout
